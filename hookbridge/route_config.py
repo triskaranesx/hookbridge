@@ -1,64 +1,74 @@
-"""Load router configuration from a plain Python dict (e.g. parsed from YAML/JSON)."""
+"""Load and build Route objects from a validated config dict."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from hookbridge.filter import FilterRule, FilterSet, add_rule
+from hookbridge.filter import FilterSet, add_rule
 from hookbridge.pipeline import Pipeline, add_transform, build_pipeline
-from hookbridge.router import Route, Router, add_route, build_router
-from hookbridge.transform import add_metadata, drop_keys, rename_keys
-
-_TRANSFORM_MAP = {
-    "rename_keys": rename_keys,
-    "drop_keys": drop_keys,
-    "add_metadata": add_metadata,
-}
+from hookbridge.ratelimit import RateLimiter, RateLimitConfig
+from hookbridge.router import Router, Route, add_route
+from hookbridge.transform import rename_keys, drop_keys, keep_keys, add_metadata
 
 
-def _build_filter_set(rules_cfg: List[Dict[str, Any]]) -> FilterSet:
+def _build_filter_set(filter_cfg: List[Dict[str, Any]]) -> FilterSet:
     fs: FilterSet = FilterSet(rules=[])
-    for r in rules_cfg:
-        rule = FilterRule(
-            field=r["field"],
-            pattern=r["pattern"],
-            mode=r.get("mode", "glob"),
-        )
-        add_rule(fs, rule)
+    for rule in filter_cfg:
+        fs = add_rule(fs, rule["field"], rule["pattern"], rule.get("mode", "glob"))
     return fs
 
 
-def _build_pipeline(transforms_cfg: List[Dict[str, Any]]) -> Pipeline:
-    pipeline = build_pipeline()
-    for t in transforms_cfg:
-        name = t["type"]
-        if name not in _TRANSFORM_MAP:
-            raise ValueError(f"Unknown transform type: {name!r}")
-        fn = _TRANSFORM_MAP[name]
-        kwargs = {k: v for k, v in t.items() if k != "type"}
-        add_transform(pipeline, lambda p, _fn=fn, _kw=kwargs: _fn(p, **_kw))
+def _build_pipeline(transform_cfg: List[Dict[str, Any]]) -> Pipeline:
+    pipeline: Pipeline = Pipeline(transforms=[])
+    for step in transform_cfg:
+        op = step.get("op")
+        if op == "rename":
+            pipeline = add_transform(pipeline, lambda p, s=step: rename_keys(p, s["mapping"]))
+        elif op == "drop":
+            pipeline = add_transform(pipeline, lambda p, s=step: drop_keys(p, s["keys"]))
+        elif op == "keep":
+            pipeline = add_transform(pipeline, lambda p, s=step: keep_keys(p, s["keys"]))
+        elif op == "metadata":
+            pipeline = add_transform(pipeline, lambda p, s=step: add_metadata(p, s.get("meta", {})))
     return pipeline
 
 
-def load_routes(config: Dict[str, Any]) -> Router:
-    """Build a :class:`Router` from a configuration dictionary.
+def _build_rate_limiter(routes_cfg: List[Dict[str, Any]]) -> RateLimiter:
+    rl = RateLimiter()
+    for route_cfg in routes_cfg:
+        rl_cfg = route_cfg.get("rate_limit")
+        if rl_cfg:
+            rl.configure(
+                route_cfg["name"],
+                RateLimitConfig(
+                    max_tokens=rl_cfg.get("max_tokens", 10),
+                    refill_rate=rl_cfg.get("refill_rate", 1.0),
+                    enabled=rl_cfg.get("enabled", True),
+                ),
+            )
+    return rl
 
-    Expected shape::
 
-        {"routes": [{"name": "...", "target_url": "...",
-                     "filters": [...], "transforms": [...],
-                     "enabled": true}]}
-    """
-    router = build_router()
-    for route_cfg in config.get("routes", []):
-        fs = _build_filter_set(route_cfg.get("filters", []))
+def load_routes(config: Dict[str, Any]) -> tuple[Router, RateLimiter]:
+    """Build a Router and a RateLimiter from a validated config dict."""
+    router: Router = Router(routes=[])
+    routes_cfg: List[Dict[str, Any]] = config.get("routes", [])
+
+    for route_cfg in routes_cfg:
+        if not route_cfg.get("enabled", True):
+            continue
+
+        filter_set = _build_filter_set(route_cfg.get("filters", []))
         pipeline = _build_pipeline(route_cfg.get("transforms", []))
+
         route = Route(
+            name=route_cfg["name"],
             target_url=route_cfg["target_url"],
-            filter_set=fs,
-            pipeline=pipeline,
-            name=route_cfg.get("name", ""),
-            enabled=route_cfg.get("enabled", True),
+            filter_set=filter_set,
+            pipeline=build_pipeline(pipeline),
+            enabled=True,
         )
-        add_route(router, route)
-    return router
+        router = add_route(router, route)
+
+    rate_limiter = _build_rate_limiter(routes_cfg)
+    return router, rate_limiter
