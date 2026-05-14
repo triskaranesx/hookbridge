@@ -20,6 +20,19 @@ def drop_keys(payload: dict[str, Any], keys: list[str]) -> dict[str, Any]:
     return {k: v for k, v in payload.items() if k not in keys}
 
 
+def keep_keys(payload: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    """Return a copy of *payload* containing only the specified *keys*.
+
+    Keys listed in *keys* that are absent from *payload* are silently ignored.
+
+    Example::
+
+        >>> keep_keys({"a": 1, "b": 2, "c": 3}, ["a", "c"])
+        {'a': 1, 'c': 3}
+    """
+    return {k: v for k, v in payload.items() if k in keys}
+
+
 def add_metadata(payload: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
     """Merge *metadata* into a copy of *payload* under the '_meta' key."""
     result = copy.copy(payload)
