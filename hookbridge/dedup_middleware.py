@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 from typing import Callable, Optional
@@ -39,6 +40,11 @@ class DedupMiddleware:
             length = 0
         return environ["wsgi.input"].read(length) if length else b""
 
+    def _restore_body(self, environ: dict, body: bytes) -> None:
+        """Rewind the request body so downstream apps can read it normally."""
+        environ["wsgi.input"] = io.BytesIO(body)
+        environ["CONTENT_LENGTH"] = str(len(body))
+
     def __call__(self, environ: dict, start_response: _START_RESPONSE):
         body = self._read_body(environ)
 
@@ -60,7 +66,5 @@ class DedupMiddleware:
             return [resp]
 
         # Restore body for downstream app
-        import io
-        environ["wsgi.input"] = io.BytesIO(body)
-        environ["CONTENT_LENGTH"] = str(len(body))
+        self._restore_body(environ, body)
         return self._app(environ, start_response)
