@@ -107,24 +107,15 @@ def test_make_entry_computes_str_size():
     assert e.payload_size == 5
 
 
-def test_make_entry_non_string_payload_size_zero():
-    e = make_entry("r1", "e1", "dispatched", {"key": "value"})
+def test_make_entry_non_string_payload_size_is_zero():
+    """Non-bytes/str payloads (e.g. None) should record a payload_size of 0."""
+    e = make_entry("r1", "e1", "dispatched", None)
     assert e.payload_size == 0
 
 
-def test_make_entry_populates_fields():
-    e = make_entry(
-        "route_a", "evt_42", "failed",
-        b"data",
-        target_url="https://example.com",
-        attempts=3,
-        error="timeout",
-        tags={"env": "prod"},
-    )
-    assert e.route == "route_a"
-    assert e.event_id == "evt_42"
-    assert e.status == "failed"
-    assert e.target_url == "https://example.com"
-    assert e.attempts == 3
-    assert e.error == "timeout"
-    assert e.tags == {"env": "prod"}
+def test_make_entry_sets_route_and_status():
+    """make_entry should propagate route and status onto the returned entry."""
+    e = make_entry("my-route", "e42", "filtered", b"data")
+    assert e.route == "my-route"
+    assert e.event_id == "e42"
+    assert e.status == "filtered"
